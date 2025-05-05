@@ -110,3 +110,54 @@
 (define-read-only (get-vote (proposal-id uint) (voter principal))
     (ok (map-get? votes { proposal-id: proposal-id, voter: voter }))
 )
+
+
+
+(define-constant ERR-NOT-CREATOR (err u106))
+(define-constant ERR-VOTES-EXIST (err u107))
+
+(define-public (withdraw-proposal (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals proposal-id) ERR-PROPOSAL-NOT-FOUND))
+        )
+        (asserts! (< stacks-block-height (get end-stacks-block-height proposal)) ERR-PROPOSAL-EXPIRED)
+        (asserts! (is-eq tx-sender (get creator proposal)) ERR-NOT-CREATOR)
+        (asserts! (and (is-eq (get votes-for proposal) u0) (is-eq (get votes-against proposal) u0)) ERR-VOTES-EXIST)
+        (asserts! (not (get executed proposal)) ERR-NOT-AUTHORIZED)
+        
+        (map-delete proposals proposal-id)
+        (ok true)
+    )
+)
+
+
+(define-constant ERR-INSUFFICIENT-FUNDS (err u108))
+
+(define-public (deposit-funds (amount uint))
+    (begin
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (var-set dao-treasury (+ (var-get dao-treasury) amount))
+        (ok true)
+    )
+)
+
+(define-read-only (get-treasury-balance)
+    (ok (var-get dao-treasury))
+)
+
+(define-public (withdraw-excess-funds (amount uint))
+    (let
+        (
+            (current-balance (var-get dao-treasury))
+        )
+        (asserts! (>= current-balance amount) ERR-INSUFFICIENT-FUNDS)
+        (try! (as-contract (stx-transfer? amount tx-sender (unwrap! (get-dao-owner) ERR-NOT-AUTHORIZED))))
+        (var-set dao-treasury (- current-balance amount))
+        (ok true)
+    )
+)
+
+(define-read-only (get-dao-owner)
+    (ok tx-sender)
+)
