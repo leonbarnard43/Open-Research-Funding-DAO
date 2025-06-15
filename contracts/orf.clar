@@ -65,7 +65,7 @@
     )
 )
 
-(define-public (vote (proposal-id uint) (amount uint) (support bool))
+(define-public (votee (proposal-id uint) (amount uint) (support bool))
     (let
         (
             (proposal (unwrap! (map-get? proposals proposal-id) ERR-PROPOSAL-NOT-FOUND))
@@ -146,6 +146,10 @@
     (ok (var-get dao-treasury))
 )
 
+(define-read-only (get-dao-owner)
+    (ok tx-sender)
+)
+
 (define-public (withdraw-excess-funds (amount uint))
     (let
         (
@@ -158,6 +162,133 @@
     )
 )
 
-(define-read-only (get-dao-owner)
-    (ok tx-sender)
+
+
+(define-map delegations
+    principal
+    principal
+)
+
+(define-constant ERR-CANNOT-DELEGATE-TO-SELF (err u109))
+(define-constant ERR-NO-DELEGATION (err u110))
+
+(define-public (set-delegate (new-delegate principal))
+    (begin
+        (asserts! (not (is-eq tx-sender new-delegate)) ERR-CANNOT-DELEGATE-TO-SELF)
+        (map-set delegations tx-sender new-delegate)
+        (ok true)
+    )
+)
+
+(define-public (undelegate)
+    (begin
+        (map-delete delegations tx-sender)
+        (ok true)
+    )
+)
+
+(define-read-only (get-delegate (address principal))
+    (ok (map-get? delegations address))
+)
+
+(define-read-only (is-delegated (address principal))
+    (ok (is-some (map-get? delegations address)))
+)
+
+
+(define-public (vote-new (proposal-id uint) (amount uint) (support bool))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals proposal-id) ERR-PROPOSAL-NOT-FOUND))
+            (voter-key { proposal-id: proposal-id, voter: tx-sender })
+            (delegate (map-get? delegations tx-sender))
+        )
+        (asserts! (< stacks-block-height (get end-stacks-block-height proposal)) ERR-PROPOSAL-EXPIRED)
+        (asserts! (is-none (map-get? votes voter-key)) ERR-ALREADY-VOTED)
+        (asserts! (is-none delegate) ERR-NOT-AUTHORIZED)
+        (map-set votes voter-key { amount: amount, support: support })
+        (map-set proposals proposal-id
+            (merge proposal
+                {
+                    votes-for: (if support (+ (get votes-for proposal) amount) (get votes-for proposal)),
+                    votes-against: (if support (get votes-against proposal) (+ (get votes-against proposal) amount))
+                }
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-constant MAX-MULTIPLIER u4)
+(define-constant BLOCKS-PER-MULTIPLIER u144)
+
+(define-map token-locks
+    principal
+    {
+        amount: uint,
+        lock-height: uint
+    }
+)
+
+(define-public (lock-tokens (amount uint))
+    (let
+        (
+            (current-lock (default-to { amount: u0, lock-height: stacks-block-height } (map-get? token-locks tx-sender)))
+        )
+        (map-set token-locks tx-sender
+            {
+                amount: (+ amount (get amount current-lock)),
+                lock-height: stacks-block-height
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-voting-power (user principal))
+    (let
+        (
+            (lock-info (default-to { amount: u0, lock-height: stacks-block-height } (map-get? token-locks user)))
+            (blocks-locked (- stacks-block-height (get lock-height lock-info)))
+            (multiplier (min-uint MAX-MULTIPLIER (+ u1 (/ blocks-locked BLOCKS-PER-MULTIPLIER))))
+        )
+        (ok (* (get amount lock-info) multiplier))
+    )
+)
+
+(define-read-only (min-uint (a uint) (b uint))
+    (if (<= a b) a b)
+)
+
+(define-public (unlock-tokens)
+    (let
+        (
+            (lock-info (unwrap! (map-get? token-locks tx-sender) ERR-NOT-AUTHORIZED))
+        )
+        (map-delete token-locks tx-sender)
+        (ok true)
+    )
+)
+
+(define-public (vote (proposal-id uint) (amount uint) (support bool))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals proposal-id) ERR-PROPOSAL-NOT-FOUND))
+            (voter-key { proposal-id: proposal-id, voter: tx-sender })
+            (voting-power (unwrap! (get-voting-power tx-sender) ERR-NOT-AUTHORIZED))
+        )
+        (asserts! (< stacks-block-height (get end-stacks-block-height proposal)) ERR-PROPOSAL-EXPIRED)
+        (asserts! (is-none (map-get? votes voter-key)) ERR-ALREADY-VOTED)
+        (asserts! (<= amount voting-power) ERR-INVALID-AMOUNT)
+        (map-set votes voter-key { amount: amount, support: support })
+        (map-set proposals proposal-id
+            (merge proposal
+                {
+                    votes-for: (if support (+ (get votes-for proposal) amount) (get votes-for proposal)),
+                    votes-against: (if support (get votes-against proposal) (+ (get votes-against proposal) amount))
+                }
+            )
+        )
+        (ok true)
+    )
 )
