@@ -4,6 +4,60 @@
 (define-constant ERR-ALREADY-VOTED (err u103))
 (define-constant ERR-PROPOSAL-EXPIRED (err u104))
 (define-constant ERR-MIN-THRESHOLD (err u105))
+(define-constant ERR-MILESTONE-NOT-FOUND (err u111))
+(define-constant ERR-MILESTONE-ALREADY-APPROVED (err u112))
+(define-constant ERR-MILESTONE-ALREADY-RELEASED (err u113))
+(define-constant ERR-INVALID-MILESTONE-ORDER (err u114))
+(define-constant ERR-PREVIOUS-MILESTONE-NOT-COMPLETE (err u115))
+(define-constant ERR-MILESTONE-FUNDS-DEPLETED (err u116))
+(define-constant ERR-INVALID-MILESTONE-COUNT (err u117))
+(define-constant ERR-MILESTONE-VOTING-ACTIVE (err u118))
+(define-constant ERR-INSUFFICIENT-MILESTONE_VOTES (err u119))
+(define-constant ERR-MILESTONE-EXPIRED (err u120))
+
+(define-constant MAX-MILESTONES u10)
+(define-constant MILESTONE-VOTING-PERIOD u288)
+(define-constant MILESTONE-APPROVAL-THRESHOLD u51)
+
+(define-map milestone-proposals
+    { proposal-id: uint, milestone-id: uint }
+    {
+        description: (string-ascii 100),
+        amount: uint,
+        due-date: uint,
+        submitted: bool,
+        approved: bool,
+        funds-released: bool,
+        submission-height: uint,
+        voting-end-height: uint,
+        approval-votes: uint,
+        rejection-votes: uint
+    }
+)
+
+(define-map milestone-votes
+    { proposal-id: uint, milestone-id: uint, voter: principal }
+    { amount: uint, support: bool }
+)
+
+(define-map milestone-submissions
+    { proposal-id: uint, milestone-id: uint }
+    {
+        deliverable-hash: (string-ascii 64),
+        submission-notes: (string-ascii 200),
+        submitted-at: uint
+    }
+)
+
+(define-map milestone-proposal-info
+    uint
+    {
+        total-milestones: uint,
+        completed-milestones: uint,
+        total-milestone-funds: uint,
+        released-funds: uint
+    }
+)
 
 (define-constant PROPOSAL-DURATION u1440)
 (define-constant MIN-PROPOSAL-AMOUNT u100000000)
@@ -290,5 +344,284 @@
             )
         )
         (ok true)
+    )
+)
+
+
+(define-public (submit-milestone-proposal 
+    (title (string-ascii 50)) 
+    (recipient principal)
+    (milestone-descriptions (list 10 (string-ascii 100)))
+    (milestone-amounts (list 10 uint))
+    (milestone-due-dates (list 10 uint))
+)
+    (let
+        (
+            (new-id (+ (var-get proposal-count) u1))
+            (end-height (+ stacks-block-height PROPOSAL-DURATION))
+            (total-amount (fold + milestone-amounts u0))
+            (milestone-count (len milestone-descriptions))
+        )
+        (asserts! (>= total-amount MIN-PROPOSAL-AMOUNT) ERR-MIN-THRESHOLD)
+        (asserts! (and (> milestone-count u0) (<= milestone-count MAX-MILESTONES)) ERR-INVALID-MILESTONE-COUNT)
+        (asserts! (is-eq (len milestone-descriptions) (len milestone-amounts)) ERR-INVALID-MILESTONE-COUNT)
+        (asserts! (is-eq (len milestone-amounts) (len milestone-due-dates)) ERR-INVALID-MILESTONE-COUNT)
+        
+        (map-set proposals new-id
+            {
+                id: new-id,
+                creator: tx-sender,
+                title: title,
+                amount: total-amount,
+                recipient: recipient,
+                votes-for: u0,
+                votes-against: u0,
+                end-stacks-block-height: end-height,
+                executed: false
+            }
+        )
+        
+        (map-set milestone-proposal-info new-id
+            {
+                total-milestones: milestone-count,
+                completed-milestones: u0,
+                total-milestone-funds: total-amount,
+                released-funds: u0
+            }
+        )
+        
+        (unwrap-panic (process-milestone-creation new-id milestone-descriptions milestone-amounts milestone-due-dates))
+        (var-set proposal-count new-id)
+        (ok new-id)
+    )
+)
+
+(define-private (process-milestone-creation
+    (proposal-id uint)
+    (descriptions (list 10 (string-ascii 100)))
+    (amounts (list 10 uint))
+    (due-dates (list 10 uint))
+)
+    (begin
+        (if (> (len descriptions) u0)
+            (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: u1 }
+                {
+                    description: (default-to "" (element-at descriptions u0)),
+                    amount: (default-to u0 (element-at amounts u0)),
+                    due-date: (default-to u0 (element-at due-dates u0)),
+                    submitted: false,
+                    approved: false,
+                    funds-released: false,
+                    submission-height: u0,
+                    voting-end-height: u0,
+                    approval-votes: u0,
+                    rejection-votes: u0
+                }
+            )
+            true
+        )
+        (if (> (len descriptions) u1)
+            (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: u2 }
+                {
+                    description: (default-to "" (element-at descriptions u1)),
+                    amount: (default-to u0 (element-at amounts u1)),
+                    due-date: (default-to u0 (element-at due-dates u1)),
+                    submitted: false,
+                    approved: false,
+                    funds-released: false,
+                    submission-height: u0,
+                    voting-end-height: u0,
+                    approval-votes: u0,
+                    rejection-votes: u0
+                }
+            )
+            true
+        )
+        (if (> (len descriptions) u2)
+            (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: u3 }
+                {
+                    description: (default-to "" (element-at descriptions u2)),
+                    amount: (default-to u0 (element-at amounts u2)),
+                    due-date: (default-to u0 (element-at due-dates u2)),
+                    submitted: false,
+                    approved: false,
+                    funds-released: false,
+                    submission-height: u0,
+                    voting-end-height: u0,
+                    approval-votes: u0,
+                    rejection-votes: u0
+                }
+            )
+            true
+        )
+        (ok true)
+    )
+)
+
+
+
+(define-public (submit-milestone-deliverable 
+    (proposal-id uint)
+    (milestone-id uint)
+    (deliverable-hash (string-ascii 64))
+    (submission-notes (string-ascii 200))
+)
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals proposal-id) ERR-PROPOSAL-NOT-FOUND))
+            (milestone (unwrap! (map-get? milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }) ERR-MILESTONE-NOT-FOUND))
+            (proposal-info (unwrap! (map-get? milestone-proposal-info proposal-id) ERR-PROPOSAL-NOT-FOUND))
+        )
+        (asserts! (is-eq tx-sender (get recipient proposal)) ERR-NOT-AUTHORIZED)
+        (asserts! (get executed proposal) ERR-NOT-AUTHORIZED)
+        (asserts! (not (get submitted milestone)) ERR-MILESTONE-ALREADY-APPROVED)
+        (asserts! (< stacks-block-height (get due-date milestone)) ERR-MILESTONE-EXPIRED)
+        
+        (if (> milestone-id u1)
+            (let
+                (
+                    (prev-milestone (unwrap! (map-get? milestone-proposals { proposal-id: proposal-id, milestone-id: (- milestone-id u1) }) ERR-MILESTONE-NOT-FOUND))
+                )
+                (asserts! (get funds-released prev-milestone) ERR-PREVIOUS-MILESTONE-NOT-COMPLETE)
+                true
+            )
+            true
+        )
+        
+        (map-set milestone-submissions { proposal-id: proposal-id, milestone-id: milestone-id }
+            {
+                deliverable-hash: deliverable-hash,
+                submission-notes: submission-notes,
+                submitted-at: stacks-block-height
+            }
+        )
+        
+        (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }
+            (merge milestone
+                {
+                    submitted: true,
+                    submission-height: stacks-block-height,
+                    voting-end-height: (+ stacks-block-height MILESTONE-VOTING-PERIOD)
+                }
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-public (vote-milestone 
+    (proposal-id uint)
+    (milestone-id uint)
+    (amount uint)
+    (support bool)
+)
+    (let
+        (
+            (milestone (unwrap! (map-get? milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }) ERR-MILESTONE-NOT-FOUND))
+            (voter-key { proposal-id: proposal-id, milestone-id: milestone-id, voter: tx-sender })
+            (voting-power (unwrap! (get-voting-power tx-sender) ERR-NOT-AUTHORIZED))
+        )
+        (asserts! (get submitted milestone) ERR-MILESTONE-NOT-FOUND)
+        (asserts! (< stacks-block-height (get voting-end-height milestone)) ERR-MILESTONE-EXPIRED)
+        (asserts! (is-none (map-get? milestone-votes voter-key)) ERR-ALREADY-VOTED)
+        (asserts! (<= amount voting-power) ERR-INVALID-AMOUNT)
+        
+        (map-set milestone-votes voter-key { amount: amount, support: support })
+        (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }
+            (merge milestone
+                {
+                    approval-votes: (if support (+ (get approval-votes milestone) amount) (get approval-votes milestone)),
+                    rejection-votes: (if support (get rejection-votes milestone) (+ (get rejection-votes milestone) amount))
+                }
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-public (finalize-milestone 
+    (proposal-id uint)
+    (milestone-id uint)
+)
+    (let
+        (
+            (milestone (unwrap! (map-get? milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }) ERR-MILESTONE-NOT-FOUND))
+            (proposal (unwrap! (map-get? proposals proposal-id) ERR-PROPOSAL-NOT-FOUND))
+            (proposal-info (unwrap! (map-get? milestone-proposal-info proposal-id) ERR-PROPOSAL-NOT-FOUND))
+            (total-votes (+ (get approval-votes milestone) (get rejection-votes milestone)))
+            (approval-percentage (if (> total-votes u0) (/ (* (get approval-votes milestone) u100) total-votes) u0))
+        )
+        (asserts! (get submitted milestone) ERR-MILESTONE-NOT-FOUND)
+        (asserts! (>= stacks-block-height (get voting-end-height milestone)) ERR-MILESTONE-VOTING-ACTIVE)
+        (asserts! (not (get approved milestone)) ERR-MILESTONE-ALREADY-APPROVED)
+        (asserts! (not (get funds-released milestone)) ERR-MILESTONE-ALREADY-RELEASED)
+        
+        (if (>= approval-percentage MILESTONE-APPROVAL-THRESHOLD)
+            (begin
+                (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }
+                    (merge milestone { approved: true, funds-released: true })
+                )
+                (try! (as-contract (stx-transfer? (get amount milestone) tx-sender (get recipient proposal))))
+                (map-set milestone-proposal-info proposal-id
+                    (merge proposal-info
+                        {
+                            completed-milestones: (+ (get completed-milestones proposal-info) u1),
+                            released-funds: (+ (get released-funds proposal-info) (get amount milestone))
+                        }
+                    )
+                )
+                (ok true)
+            )
+            (begin
+                (map-set milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }
+                    (merge milestone { approved: false })
+                )
+                (ok false)
+            )
+        )
+    )
+)
+
+(define-read-only (get-milestone 
+    (proposal-id uint)
+    (milestone-id uint)
+)
+    (ok (map-get? milestone-proposals { proposal-id: proposal-id, milestone-id: milestone-id }))
+)
+
+(define-read-only (get-milestone-submission 
+    (proposal-id uint)
+    (milestone-id uint)
+)
+    (ok (map-get? milestone-submissions { proposal-id: proposal-id, milestone-id: milestone-id }))
+)
+
+(define-read-only (get-milestone-proposal-info (proposal-id uint))
+    (ok (map-get? milestone-proposal-info proposal-id))
+)
+
+(define-read-only (get-milestone-vote 
+    (proposal-id uint)
+    (milestone-id uint)
+    (voter principal)
+)
+    (ok (map-get? milestone-votes { proposal-id: proposal-id, milestone-id: milestone-id, voter: voter }))
+)
+
+(define-read-only (calculate-milestone-progress (proposal-id uint))
+    (let
+        (
+            (info (unwrap! (map-get? milestone-proposal-info proposal-id) ERR-PROPOSAL-NOT-FOUND))
+        )
+        (ok 
+            {
+                completion-rate: (if (> (get total-milestones info) u0) 
+                    (/ (* (get completed-milestones info) u100) (get total-milestones info)) 
+                    u0),
+                funds-utilization: (if (> (get total-milestone-funds info) u0) 
+                    (/ (* (get released-funds info) u100) (get total-milestone-funds info)) 
+                    u0)
+            }
+        )
     )
 )
