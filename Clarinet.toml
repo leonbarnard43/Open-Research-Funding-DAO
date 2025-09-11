@@ -9,6 +9,10 @@ requirements = []
 path = 'contracts/orf.clar'
 clarity_version = 3
 epoch = 3.1
+[contracts.ResearchNetwork]
+path = 'contracts/ResearchNetwork.clar'
+clarity_version = 3
+epoch = 3.1
 [repl.analysis]
 passes = ['check_checker']
 
